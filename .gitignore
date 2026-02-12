@@ -1,0 +1,35 @@
+# Rust build artifacts
+/target/
+**/*.rlib
+**/*.rmeta
+**/*.d
+
+# eBPF local build outputs (if generated outside target/)
+/traffic-analyzer-ebpf.o
+/libtraffic_analyzer_ebpf.so
+
+# Runtime data files
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Logs and temporary files
+*.log
+*.tmp
+*.swp
+*.swo
+*~
+
+# Local environment files
+.env
+.env.*
+
+# Editor / IDE
+.idea/
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
