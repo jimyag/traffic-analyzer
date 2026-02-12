@@ -1,0 +1,39 @@
+name: build-binary-on-push
+
+on:
+  push:
+    tags-ignore:
+      - "*"
+  workflow_dispatch:
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build single binary (embedded eBPF)
+        run: ./hack/build-single.sh
+
+      - name: Prepare artifact (no compression)
+        run: |
+          mkdir -p dist
+          cp target/release/traffic-analyzer dist/traffic-analyzer-linux-x86_64
+          chmod +x dist/traffic-analyzer-linux-x86_64
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: traffic-analyzer-linux-x86_64-${{ github.sha }}
+          path: dist/traffic-analyzer-linux-x86_64
+          if-no-files-found: error
+          retention-days: 7
