@@ -28,6 +28,7 @@ use crate::tls::parse_tls_client_hello_sni;
 
 const DNS_DEFAULT_TTL_SEC: u64 = 300;
 const SNI_DEFAULT_TTL_SEC: u64 = 300;
+const EVENT_POLL_INTERVAL_MIN_MS: u64 = 20;
 const SIGINT: i32 = 2;
 const SIGTERM: i32 = 15;
 const SIG_ERR: usize = usize::MAX;
@@ -50,6 +51,7 @@ pub struct RunConfig {
     pub dns_ttl_cap_secs: u64,
     pub sni_ttl_cap_secs: u64,
     pub flow_idle_timeout_secs: u64,
+    pub event_poll_interval: Duration,
 }
 
 pub enum BpfObject {
@@ -80,6 +82,13 @@ struct CacheMetricDelta {
     new_entries: u64,
     refresh_entries: u64,
     expired_entries: u64,
+}
+
+#[derive(Default)]
+struct PendingEvents {
+    dns_bucket: HashMap<(String, u16), u64>,
+    sni_bucket: HashMap<String, u64>,
+    cache_metrics: CacheMetricDelta,
 }
 
 struct DbWriter {
@@ -125,6 +134,8 @@ pub fn run(cfg: RunConfig) -> Result<()> {
     let mut flow_snapshot = HashMap::<FlowKey, FlowValue>::new();
     let mut domain_cache = HashMap::<IpKey, DomainCacheEntry>::new();
     let mut collector_stats_snapshot = [0u64; 3];
+    let mut pending_events = PendingEvents::default();
+    let mut last_flush = Instant::now();
 
     info!(
         iface = %cfg.iface,
@@ -140,37 +151,53 @@ pub fn run(cfg: RunConfig) -> Result<()> {
                 break;
             }
 
-            collect_and_flush_once(
-                &mut flow_map,
+            collect_events_once(
                 &mut dns_events,
                 &mut tls_events,
-                &collector_stats,
-                &mut collector_stats_snapshot,
-                &mut flow_snapshot,
                 &mut domain_cache,
-                &db_writer.tx,
-                &cfg.iface,
+                &mut pending_events,
                 cfg.dns_ttl_cap_secs,
                 cfg.sni_ttl_cap_secs,
-                cfg.flow_idle_timeout_secs,
-            )?;
+            );
+            if last_flush.elapsed() >= cfg.flush_interval {
+                flush_pending_once(
+                    &mut flow_map,
+                    &collector_stats,
+                    &mut collector_stats_snapshot,
+                    &mut flow_snapshot,
+                    &mut domain_cache,
+                    &mut pending_events,
+                    &db_writer.tx,
+                    &cfg.iface,
+                    cfg.flow_idle_timeout_secs,
+                )?;
+                last_flush = Instant::now();
+            }
 
-            sleep_with_shutdown(cfg.flush_interval);
+            sleep_with_shutdown(
+                cfg.event_poll_interval
+                    .max(Duration::from_millis(EVENT_POLL_INTERVAL_MIN_MS)),
+            );
         }
 
         // Final best-effort round to capture packets observed just before Ctrl+C.
-        collect_and_flush_once(
-            &mut flow_map,
+        collect_events_once(
             &mut dns_events,
             &mut tls_events,
+            &mut domain_cache,
+            &mut pending_events,
+            cfg.dns_ttl_cap_secs,
+            cfg.sni_ttl_cap_secs,
+        );
+        flush_pending_once(
+            &mut flow_map,
             &collector_stats,
             &mut collector_stats_snapshot,
             &mut flow_snapshot,
             &mut domain_cache,
+            &mut pending_events,
             &db_writer.tx,
             &cfg.iface,
-            cfg.dns_ttl_cap_secs,
-            cfg.sni_ttl_cap_secs,
             cfg.flow_idle_timeout_secs,
         )?;
         Ok(())
@@ -266,20 +293,47 @@ fn shutdown_db_writer(db_writer: DbWriter) {
     }
 }
 
-fn collect_and_flush_once(
-    flow_map: &mut AyaHashMap<aya::maps::MapData, FlowKey, FlowValue>,
+fn collect_events_once(
     dns_events: &mut AyaRingBuf<aya::maps::MapData>,
     tls_events: &mut AyaRingBuf<aya::maps::MapData>,
+    domain_cache: &mut HashMap<IpKey, DomainCacheEntry>,
+    pending_events: &mut PendingEvents,
+    dns_ttl_cap_secs: u64,
+    sni_ttl_cap_secs: u64,
+) {
+    let now_ns = monotonic_ns();
+    collect_dns_events(
+        dns_events,
+        now_ns,
+        dns_ttl_cap_secs,
+        domain_cache,
+        &mut pending_events.dns_bucket,
+        &mut pending_events.cache_metrics,
+    );
+    collect_tls_events(
+        tls_events,
+        now_ns,
+        sni_ttl_cap_secs,
+        domain_cache,
+        &mut pending_events.sni_bucket,
+        &mut pending_events.cache_metrics,
+    );
+}
+
+fn flush_pending_once(
+    flow_map: &mut AyaHashMap<aya::maps::MapData, FlowKey, FlowValue>,
     collector_stats: &AyaArray<aya::maps::MapData, u64>,
     collector_stats_snapshot: &mut [u64; 3],
     flow_snapshot: &mut HashMap<FlowKey, FlowValue>,
     domain_cache: &mut HashMap<IpKey, DomainCacheEntry>,
+    pending_events: &mut PendingEvents,
     tx: &mpsc::Sender<WriteBatch>,
     iface: &str,
-    dns_ttl_cap_secs: u64,
-    sni_ttl_cap_secs: u64,
     flow_idle_timeout_secs: u64,
 ) -> Result<()> {
+    let dns_delta = mem::take(&mut pending_events.dns_bucket);
+    let sni_delta = mem::take(&mut pending_events.sni_bucket);
+    let mut cache_metrics = mem::take(&mut pending_events.cache_metrics);
     let now_ns = monotonic_ns();
     let flow_evicted = prune_stale_flow_entries(
         flow_map,
@@ -287,26 +341,6 @@ fn collect_and_flush_once(
         now_ns,
         flow_idle_timeout_secs.max(1),
     )?;
-    let mut dns_delta = HashMap::<(String, u16), u64>::new();
-    let mut sni_delta = HashMap::<String, u64>::new();
-    let mut cache_metrics = CacheMetricDelta::default();
-    collect_dns_events(
-        dns_events,
-        now_ns,
-        dns_ttl_cap_secs,
-        domain_cache,
-        &mut dns_delta,
-        &mut cache_metrics,
-    );
-    collect_tls_events(
-        tls_events,
-        now_ns,
-        sni_ttl_cap_secs,
-        domain_cache,
-        &mut sni_delta,
-        &mut cache_metrics,
-    );
-
     let ip_domain_cache = build_ip_domain_cache(domain_cache, now_ns, &mut cache_metrics);
     let mut flow_delta = HashMap::<FlowBucketKey, CounterDelta>::new();
     collect_flow_delta(flow_map, flow_snapshot, &ip_domain_cache, &mut flow_delta)?;

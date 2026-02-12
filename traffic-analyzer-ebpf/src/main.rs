@@ -24,16 +24,18 @@ const UDP_PROTO: u8 = 17;
 const TCP_PROTO: u8 = 6;
 const DNS_PORT: u16 = 53;
 const HTTPS_PORT: u16 = 443;
+const TLS_CONTENT_TYPE_HANDSHAKE: u8 = 22;
+const TLS_HANDSHAKE_CLIENT_HELLO: u8 = 1;
 
 #[map]
 static FLOW_STATS: HashMap<FlowKey, FlowValue> =
     HashMap::<FlowKey, FlowValue>::with_max_entries(FLOW_STATS_MAX_ENTRIES, 0);
 
 #[map]
-static DNS_EVENTS: RingBuf = RingBuf::with_byte_size(262_144, 0);
+static DNS_EVENTS: RingBuf = RingBuf::with_byte_size(524_288, 0);
 
 #[map]
-static TLS_EVENTS: RingBuf = RingBuf::with_byte_size(262_144, 0);
+static TLS_EVENTS: RingBuf = RingBuf::with_byte_size(2_097_152, 0);
 
 #[map]
 static COLLECTOR_STATS: Array<u64> = Array::<u64>::with_max_entries(COLLECTOR_STATS_MAP_ENTRIES, 0);
@@ -169,7 +171,8 @@ fn emit_tls_event(
     src_ip: [u8; 16],
     dst_ip: [u8; 16],
 ) -> Result<(), ()> {
-    if src_port != HTTPS_PORT && dst_port != HTTPS_PORT {
+    // Only client->server side can carry ClientHello and SNI.
+    if dst_port != HTTPS_PORT {
         return Ok(());
     }
 
@@ -186,6 +189,15 @@ fn emit_tls_event(
 
     let tls_len = pkt_len - tls_off;
     if tls_len < 5 {
+        return Ok(());
+    }
+    if read_u8(ctx, tls_off)? != TLS_CONTENT_TYPE_HANDSHAKE {
+        return Ok(());
+    }
+    if tls_len < 6 {
+        return Ok(());
+    }
+    if read_u8(ctx, tls_off + 5)? != TLS_HANDSHAKE_CLIENT_HELLO {
         return Ok(());
     }
 

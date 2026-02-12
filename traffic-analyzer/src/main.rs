@@ -18,6 +18,7 @@ use ui::UiConfig;
 
 #[cfg(embedded_bpf)]
 static EMBEDDED_BPF_OBJECT: &[u8] = include_bytes!(env!("TRAFFIC_ANALYZER_EMBED_BPF_PATH"));
+const DEFAULT_DB_PATH: &str = "/var/lib/traffic-analyzer/traffic-analyzer.db";
 
 #[derive(Parser, Debug)]
 #[command(name = "traffic-analyzer")]
@@ -38,7 +39,7 @@ enum Command {
         #[arg(long)]
         bpf_object: Option<String>,
 
-        #[arg(long, default_value = "./traffic-analyzer.db")]
+        #[arg(long, default_value = DEFAULT_DB_PATH)]
         db: String,
 
         #[arg(long, default_value_t = 1)]
@@ -52,6 +53,9 @@ enum Command {
 
         #[arg(long, default_value_t = 900)]
         flow_idle_timeout_secs: u64,
+
+        #[arg(long, default_value_t = 100)]
+        event_poll_millis: u64,
     },
 
     /// Show top peer IP by bytes in lookback window.
@@ -59,7 +63,7 @@ enum Command {
         #[arg(long)]
         iface: String,
 
-        #[arg(long, default_value = "./traffic-analyzer.db")]
+        #[arg(long, default_value = DEFAULT_DB_PATH)]
         db: String,
 
         #[arg(long, default_value_t = 60)]
@@ -74,7 +78,7 @@ enum Command {
         #[arg(long)]
         iface: String,
 
-        #[arg(long, default_value = "./traffic-analyzer.db")]
+        #[arg(long, default_value = DEFAULT_DB_PATH)]
         db: String,
 
         #[arg(long, default_value_t = 60)]
@@ -89,7 +93,7 @@ enum Command {
         #[arg(long)]
         iface: String,
 
-        #[arg(long, default_value = "./traffic-analyzer.db")]
+        #[arg(long, default_value = DEFAULT_DB_PATH)]
         db: String,
 
         #[arg(long, default_value_t = 60)]
@@ -104,7 +108,7 @@ enum Command {
         #[arg(long)]
         iface: String,
 
-        #[arg(long, default_value = "./traffic-analyzer.db")]
+        #[arg(long, default_value = DEFAULT_DB_PATH)]
         db: String,
 
         #[arg(long, default_value_t = 60)]
@@ -119,7 +123,7 @@ enum Command {
         #[arg(long)]
         iface: String,
 
-        #[arg(long, default_value = "./traffic-analyzer.db")]
+        #[arg(long, default_value = DEFAULT_DB_PATH)]
         db: String,
 
         #[arg(long, default_value_t = 60)]
@@ -134,7 +138,7 @@ enum Command {
         #[arg(long)]
         iface: String,
 
-        #[arg(long, default_value = "./traffic-analyzer.db")]
+        #[arg(long, default_value = DEFAULT_DB_PATH)]
         db: String,
 
         #[arg(long, default_value_t = 60)]
@@ -149,7 +153,7 @@ enum Command {
         #[arg(long)]
         iface: String,
 
-        #[arg(long, default_value = "./traffic-analyzer.db")]
+        #[arg(long, default_value = DEFAULT_DB_PATH)]
         db: String,
 
         #[arg(long, default_value_t = 60)]
@@ -167,7 +171,7 @@ enum Command {
         #[arg(long)]
         domain: String,
 
-        #[arg(long, default_value = "./traffic-analyzer.db")]
+        #[arg(long, default_value = DEFAULT_DB_PATH)]
         db: String,
 
         #[arg(long, default_value_t = 60)]
@@ -182,7 +186,7 @@ enum Command {
         #[arg(long)]
         iface: String,
 
-        #[arg(long, default_value = "./traffic-analyzer.db")]
+        #[arg(long, default_value = DEFAULT_DB_PATH)]
         db: String,
 
         #[arg(long, default_value_t = 60)]
@@ -194,7 +198,7 @@ enum Command {
         #[arg(long)]
         iface: String,
 
-        #[arg(long, default_value = "./traffic-analyzer.db")]
+        #[arg(long, default_value = DEFAULT_DB_PATH)]
         db: String,
 
         #[arg(long, default_value_t = 60)]
@@ -209,7 +213,7 @@ enum Command {
         #[arg(long)]
         iface: String,
 
-        #[arg(long, default_value = "./traffic-analyzer.db")]
+        #[arg(long, default_value = DEFAULT_DB_PATH)]
         db: String,
 
         #[arg(long, default_value_t = 60)]
@@ -224,7 +228,7 @@ enum Command {
         #[arg(long)]
         iface: String,
 
-        #[arg(long, default_value = "./traffic-analyzer.db")]
+        #[arg(long, default_value = DEFAULT_DB_PATH)]
         db: String,
 
         #[arg(long, default_value_t = 60)]
@@ -239,7 +243,7 @@ enum Command {
         #[arg(long)]
         iface: String,
 
-        #[arg(long, default_value = "./traffic-analyzer.db")]
+        #[arg(long, default_value = DEFAULT_DB_PATH)]
         db: String,
 
         #[arg(long, default_value_t = 60)]
@@ -254,7 +258,7 @@ enum Command {
 
     /// Delete historical rows older than retention days.
     Prune {
-        #[arg(long, default_value = "./traffic-analyzer.db")]
+        #[arg(long, default_value = DEFAULT_DB_PATH)]
         db: String,
 
         #[arg(long, default_value_t = 30)]
@@ -275,6 +279,7 @@ fn main() -> Result<()> {
             dns_ttl_cap_secs,
             sni_ttl_cap_secs,
             flow_idle_timeout_secs,
+            event_poll_millis,
         } => collector::run(RunConfig {
             iface,
             bpf_object: resolve_bpf_object(bpf_object)?,
@@ -283,6 +288,7 @@ fn main() -> Result<()> {
             dns_ttl_cap_secs,
             sni_ttl_cap_secs,
             flow_idle_timeout_secs,
+            event_poll_interval: Duration::from_millis(event_poll_millis.max(1)),
         }),
         Command::TopIp {
             iface,

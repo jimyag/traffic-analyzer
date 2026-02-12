@@ -1,4 +1,4 @@
-# traffic-analyzer-rs
+# traffic-analyzer
 
 基于 Rust + aya 的家庭网络流量分析工具，目标是回答“流量花在哪里”。
 
@@ -15,7 +15,7 @@
 ## 目录结构
 
 ```text
-traffic-analyzer-rs/
+traffic-analyzer/
 ├── Cargo.toml                    # workspace
 ├── README.md
 ├── traffic-analyzer-common/      # eBPF 与 userspace 共享结构
@@ -29,6 +29,7 @@ traffic-analyzer-rs/
 2. 运行用户具备 root 或等效权限。
 3. 建议关闭或减少 DNS over HTTPS / DNS over TLS，否则域名归因会下降。
 4. 若 DB 文件由 `sudo` 生成，首次查询建议使用可写权限运行一次（或调整文件属主），以完成自动建表/迁移。
+5. 默认 DB 路径为 `/var/lib/traffic-analyzer/traffic-analyzer.db`，程序会自动创建父目录。
 
 ## 构建
 
@@ -37,7 +38,7 @@ traffic-analyzer-rs/
 > eBPF 链接需要 `bpf-linker`，`./hack/build-ebpf.sh` 会自动检查并安装。
 
 ```bash
-cd cmd/tools/traffic-analyzer-rs
+cd /path/to/traffic-analyzer
 
 # 用户态
 cargo build -p traffic-analyzer --release
@@ -52,13 +53,14 @@ cargo build -p traffic-analyzer --release
 ## 采集命令
 
 ```bash
-cd cmd/tools/traffic-analyzer-rs
+cd /path/to/traffic-analyzer
 
 cargo run -p traffic-analyzer -- run \
   --iface eth0 \
-  --bpf-object ./target/bpfel-unknown-none/release/traffic-analyzer-ebpf \
-  --db ./traffic-analyzer.db \
+  --bpf-object ./target/bpfel-unknown-none/release/libtraffic_analyzer_ebpf.so \
+  --db /var/lib/traffic-analyzer/traffic-analyzer.db \
   --flush-interval-secs 1 \
+  --event-poll-millis 100 \
   --dns-ttl-cap-secs 600 \
   --sni-ttl-cap-secs 300 \
   --flow-idle-timeout-secs 900
@@ -70,7 +72,7 @@ cargo run -p traffic-analyzer -- run --iface eth0
 单二进制模式下，`traffic-analyzer` 会在编译期内嵌 eBPF 对象，运行时可不传 `--bpf-object`：
 
 ```bash
-sudo ./target/release/traffic-analyzer run --iface eth0 --db ./traffic-analyzer.db
+sudo ./target/release/traffic-analyzer run --iface eth0 --db /var/lib/traffic-analyzer/traffic-analyzer.db
 ```
 
 eBPF 加载优先级：
@@ -85,65 +87,68 @@ eBPF 加载优先级：
 rustup toolchain install nightly --component rust-src
 cargo install bpf-linker
 cargo +nightly build -Z build-std=core --target bpfel-unknown-none -p traffic-analyzer-ebpf --release
+# eBPF object path:
+# ./target/bpfel-unknown-none/release/libtraffic_analyzer_ebpf.so
 ```
 
 ## 报表命令
 
 ```bash
 # Top IP
-cargo run -p traffic-analyzer -- top-ip --iface eth0 --db ./traffic-analyzer.db --lookback-minutes 60 --limit 20
+cargo run -p traffic-analyzer -- top-ip --iface eth0 --db /var/lib/traffic-analyzer/traffic-analyzer.db --lookback-minutes 60 --limit 20
 
 # Top LAN IP（内网设备维度）
-cargo run -p traffic-analyzer -- top-lan --iface eth0 --db ./traffic-analyzer.db --lookback-minutes 60 --limit 20
+cargo run -p traffic-analyzer -- top-lan --iface eth0 --db /var/lib/traffic-analyzer/traffic-analyzer.db --lookback-minutes 60 --limit 20
 
 # Top 5-tuple Flow（src_ip:src_port -> dst_ip:dst_port）
-cargo run -p traffic-analyzer -- top-flow --iface eth0 --db ./traffic-analyzer.db --lookback-minutes 60 --limit 20
+cargo run -p traffic-analyzer -- top-flow --iface eth0 --db /var/lib/traffic-analyzer/traffic-analyzer.db --lookback-minutes 60 --limit 20
 
 # Top Domain
-cargo run -p traffic-analyzer -- top-domain --iface eth0 --db ./traffic-analyzer.db --lookback-minutes 60 --limit 20
+cargo run -p traffic-analyzer -- top-domain --iface eth0 --db /var/lib/traffic-analyzer/traffic-analyzer.db --lookback-minutes 60 --limit 20
 
 # Top DNS Query
-cargo run -p traffic-analyzer -- top-dns --iface eth0 --db ./traffic-analyzer.db --lookback-minutes 60 --limit 20
+cargo run -p traffic-analyzer -- top-dns --iface eth0 --db /var/lib/traffic-analyzer/traffic-analyzer.db --lookback-minutes 60 --limit 20
 
 # Top TLS SNI
-cargo run -p traffic-analyzer -- top-sni --iface eth0 --db ./traffic-analyzer.db --lookback-minutes 60 --limit 20
+cargo run -p traffic-analyzer -- top-sni --iface eth0 --db /var/lib/traffic-analyzer/traffic-analyzer.db --lookback-minutes 60 --limit 20
 
 # Top QUIC(udp/443)
-cargo run -p traffic-analyzer -- top-quic --iface eth0 --db ./traffic-analyzer.db --lookback-minutes 60 --limit 20
+cargo run -p traffic-analyzer -- top-quic --iface eth0 --db /var/lib/traffic-analyzer/traffic-analyzer.db --lookback-minutes 60 --limit 20
 
 # 单域名流量明细（按 direction/proto/port）
-cargo run -p traffic-analyzer -- domain-detail --iface eth0 --db ./traffic-analyzer.db --domain api.github.com --lookback-minutes 60 --limit 50
+cargo run -p traffic-analyzer -- domain-detail --iface eth0 --db /var/lib/traffic-analyzer/traffic-analyzer.db --domain api.github.com --lookback-minutes 60 --limit 50
 
 # 归因覆盖率（exact/unknown）
-cargo run -p traffic-analyzer -- attribution-coverage --iface eth0 --db ./traffic-analyzer.db --lookback-minutes 60
+cargo run -p traffic-analyzer -- attribution-coverage --iface eth0 --db /var/lib/traffic-analyzer/traffic-analyzer.db --lookback-minutes 60
 
 # DNS/SNI 缓存行为
-cargo run -p traffic-analyzer -- dns-cache-inspect --iface eth0 --db ./traffic-analyzer.db --lookback-minutes 60 --limit 20
+cargo run -p traffic-analyzer -- dns-cache-inspect --iface eth0 --db /var/lib/traffic-analyzer/traffic-analyzer.db --lookback-minutes 60 --limit 20
 
 # 采集健康度（flow map 压力 / 丢事件）
-cargo run -p traffic-analyzer -- collector-health --iface eth0 --db ./traffic-analyzer.db --lookback-minutes 60 --limit 20
+cargo run -p traffic-analyzer -- collector-health --iface eth0 --db /var/lib/traffic-analyzer/traffic-analyzer.db --lookback-minutes 60 --limit 20
 
 # 可疑 DoH/DoT
-cargo run -p traffic-analyzer -- top-dohdot --iface eth0 --db ./traffic-analyzer.db --lookback-minutes 60 --limit 20
+cargo run -p traffic-analyzer -- top-dohdot --iface eth0 --db /var/lib/traffic-analyzer/traffic-analyzer.db --lookback-minutes 60 --limit 20
 
-# 实时面板（统一查看 Top Domain/IP/LAN IP/DNS/SNI/QUIC/DoH/DoT/Coverage）
-cargo run -p traffic-analyzer -- ui --iface eth0 --db ./traffic-analyzer.db --lookback-minutes 60 --limit 10 --refresh-secs 2
+# 实时面板（3 个页面，Tab/Shift+Tab 或 Left/Right 切换，q 退出）
+cargo run -p traffic-analyzer -- ui --iface eth0 --db /var/lib/traffic-analyzer/traffic-analyzer.db --lookback-minutes 60 --limit 10 --refresh-secs 2
 
 # 清理 30 天前数据
-cargo run -p traffic-analyzer -- prune --db ./traffic-analyzer.db --retention-days 30
+cargo run -p traffic-analyzer -- prune --db /var/lib/traffic-analyzer/traffic-analyzer.db --retention-days 30
 ```
 
 ## 持久化策略
 
-1. 采集周期：默认每 `1s` 拉取 map/ringbuf 增量。
-2. 聚合粒度：按分钟键（`ts_minute`）聚合到 `flow_1m_5t` 与 `dns_1m`。
-3. 写入模式：采集线程异步投递批次，后台写线程执行 SQLite `WAL` + 事务 `upsert`。
-4. 保留策略：通过 `prune` 命令保留最近 N 天数据。
-5. 退出行为：默认支持 `Ctrl+C` 优雅退出，退出前会执行最终一次增量采集并等待写线程完成落库。
-6. 新增表：`sni_1m`（SNI 计数）和 `dns_cache_1m`（缓存行为指标）。
-7. 流量表使用五元组：`flow_1m_5t` 记录 `src_ip/src_port/dst_ip/dst_port/proto/direction/domain/bytes/packets`。
-8. 兼容迁移：启动时会自动检测旧版 `flow_1m(peer_ip/peer_port)` 表并一次性迁移到 `flow_1m_5t`，迁移状态保存在 `meta_kv`。
-9. 查询连接策略：查询命令优先使用可写连接（便于自动建表/迁移），若命中只读错误会自动降级为只读连接。
+1. 聚合周期：默认每 `1s` 采集 flow map 增量并触发一次聚合/落库。
+2. 事件拉取：默认每 `100ms` 高频拉取 DNS/TLS ringbuf（`--event-poll-millis` 可调），降低突发丢事件。
+3. 聚合粒度：按分钟键（`ts_minute`）聚合到 `flow_1m_5t` 与 `dns_1m`。
+4. 写入模式：采集线程异步投递批次，后台写线程执行 SQLite `WAL` + 事务 `upsert`。
+5. 保留策略：通过 `prune` 命令保留最近 N 天数据。
+6. 退出行为：默认支持 `Ctrl+C` 优雅退出，退出前会执行最终一次增量采集并等待写线程完成落库。
+7. 新增表：`sni_1m`（SNI 计数）和 `dns_cache_1m`（缓存行为指标）。
+8. 流量表使用五元组：`flow_1m_5t` 记录 `src_ip/src_port/dst_ip/dst_port/proto/direction/domain/bytes/packets`。
+9. 兼容迁移：启动时会自动检测旧版 `flow_1m(peer_ip/peer_port)` 表并一次性迁移到 `flow_1m_5t`，迁移状态保存在 `meta_kv`。
+10. 查询连接策略：查询命令优先使用可写连接（便于自动建表/迁移），若命中只读错误会自动降级为只读连接。
 
 ## DNS 实现说明
 

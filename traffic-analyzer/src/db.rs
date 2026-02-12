@@ -1,4 +1,5 @@
 use std::net::{IpAddr, Ipv4Addr};
+use std::path::Path;
 
 use anyhow::Result;
 use rusqlite::{params, Connection, ErrorCode, OpenFlags, OptionalExtension};
@@ -17,6 +18,7 @@ const LEGACY_FLOW_MIGRATION_KEY: &str = "flow_1m_migrated_to_5t_v1";
 
 impl Database {
     pub fn open(path: &str) -> Result<Self> {
+        ensure_db_parent_dir(path)?;
         let conn = Connection::open(path)?;
         conn.execute_batch(
             r#"
@@ -769,6 +771,18 @@ impl Database {
         self.conn.execute_batch("VACUUM;")?;
         Ok(())
     }
+}
+
+fn ensure_db_parent_dir(path: &str) -> Result<()> {
+    if path == ":memory:" || path.starts_with("file:") {
+        return Ok(());
+    }
+    let parent = match Path::new(path).parent() {
+        Some(v) if !v.as_os_str().is_empty() => v,
+        _ => return Ok(()),
+    };
+    std::fs::create_dir_all(parent)?;
+    Ok(())
 }
 
 fn migrate_legacy_flow_table(conn: &Connection) -> Result<()> {
